@@ -1,0 +1,27 @@
+const express=require("express"),cors=require("cors"),crypto=require("crypto"),fs=require("fs"),path=require("path");
+const app=express(),PORT=process.env.PORT||5000,FILE=path.join(__dirname,"data","db.json");
+app.use(cors({origin:true,credentials:true}));app.use(express.json());
+const hash=p=>{const s=crypto.randomBytes(16).toString("hex");return{s, h:crypto.scryptSync(p,s,64).toString("hex")}};
+const ok=(p,s,h)=>crypto.scryptSync(p,s,64).toString("hex")===h;
+function db(){if(!fs.existsSync(FILE))seed();return JSON.parse(fs.readFileSync(FILE,"utf8"))}
+function save(x){fs.writeFileSync(FILE,JSON.stringify(x,null,2))}
+function seed(){const raw=[["student@campuslink.com","student","Prakash Kumar","student123"],["recruiter@campuslink.com","recruiter","TechNova Pvt. Ltd.","recruiter123"],["admin@campuslink.com","admin","Placement Cell","admin123"]];const users=raw.map((x,i)=>{const p=hash(x[3]);return{id:i+1,email:x[0],role:x[1],name:x[2],salt:p.s,passwordHash:p.h}});save({users,students:[{userId:1,program:"B.Tech CSE",cgpa:8.2,targetRole:"Software Engineer",readiness:82,skills:{Java:88,SQL:72,DSA:80,Cloud:42}}],jobs:[{id:1,company:"TCS",role:"Software Engineer",package:"₹8.5 LPA",match:92,status:"Open"},{id:2,company:"Infosys",role:"Graduate Engineer",package:"₹7.2 LPA",match:86,status:"Open"},{id:3,company:"TechNova",role:"Developer",package:"₹8.0 LPA",match:78,status:"Open"}],applications:[{id:1,studentId:1,jobId:1,company:"TCS",role:"Software Engineer",status:"Shortlisted",stage:"Interview",match:92}],interviews:[],offers:[]})}
+const sessions=new Map();
+function auth(req,res,next){const t=(req.headers.authorization||"").replace("Bearer ",""),u=sessions.get(t);if(!u)return res.status(401).json({error:"Login required"});req.user=u;next()}
+const role=(...r)=>(req,res,next)=>r.includes(req.user.role)?next():res.status(403).json({error:"Access denied"});
+app.get("/api/health",(q,s)=>s.json({ok:true,service:"CAMPUSLINK Backend"}));
+app.post("/api/auth/login",(q,s)=>{const{email,password}=q.body||{},u=db().users.find(x=>x.email.toLowerCase()===String(email||"").toLowerCase());if(!u||!ok(password,u.salt,u.passwordHash))return s.status(401).json({error:"Invalid email or password"});const t=crypto.randomBytes(32).toString("hex"),safe={id:u.id,email:u.email,role:u.role,name:u.name};sessions.set(t,safe);s.json({token:t,user:safe})});
+app.post("/api/auth/logout",auth,(q,s)=>{sessions.delete((q.headers.authorization||"").replace("Bearer ",""));s.json({message:"Logged out"})});
+app.get("/api/auth/me",auth,(q,s)=>s.json({user:q.user}));
+app.get("/api/student/profile",auth,role("student"),(q,s)=>s.json(db().students.find(x=>x.userId===q.user.id)));
+app.get("/api/student/jobs",auth,role("student"),(q,s)=>s.json(db().jobs));
+app.get("/api/student/applications",auth,role("student"),(q,s)=>s.json(db().applications.filter(x=>x.studentId===q.user.id)));
+app.post("/api/student/applications",auth,role("student"),(q,s)=>{const d=db(),j=d.jobs.find(x=>x.id==q.body.jobId);if(!j)return s.status(404).json({error:"Job not found"});if(d.applications.some(x=>x.studentId===q.user.id&&x.jobId===j.id))return s.status(409).json({error:"Already applied"});const a={id:Date.now(),studentId:q.user.id,jobId:j.id,company:j.company,role:j.role,status:"Applied",stage:"Applied",match:j.match,appliedOn:new Date().toISOString().slice(0,10)};d.applications.push(a);save(d);s.status(201).json(a)});
+app.get("/api/student/offers",auth,role("student"),(q,s)=>{const d=db(),ids=d.applications.filter(a=>a.studentId===q.user.id).map(a=>a.id);s.json(d.offers.filter(o=>ids.includes(o.applicationId)))});
+app.get("/api/recruiter/candidates",auth,role("recruiter"),(q,s)=>s.json(db().applications));
+app.patch("/api/recruiter/applications/:id/status",auth,role("recruiter"),(q,s)=>{const d=db(),a=d.applications.find(x=>x.id==q.params.id);if(!a)return s.status(404).json({error:"Application not found"});a.status=q.body.status||a.status;if(a.status==="Shortlisted")a.stage="Screening";if(a.status==="Interview")a.stage="Interview";save(d);s.json(a)});
+app.post("/api/recruiter/interviews",auth,role("recruiter"),(q,s)=>{const d=db(),a=d.applications.find(x=>x.id==q.body.applicationId);if(!a)return s.status(404).json({error:"Application not found"});const i={id:Date.now(),applicationId:a.id,date:q.body.date,time:q.body.time,mode:q.body.mode||"Online",status:"Scheduled"};d.interviews.push(i);a.status="Interview Scheduled";a.stage="Interview";save(d);s.status(201).json(i)});
+app.post("/api/recruiter/offers",auth,role("recruiter"),(q,s)=>{const d=db(),a=d.applications.find(x=>x.id==q.body.applicationId);if(!a)return s.status(404).json({error:"Application not found"});const o={id:Date.now(),applicationId:a.id,company:a.company,role:a.role,package:q.body.package,joiningDate:q.body.joiningDate,status:"Received"};d.offers.push(o);a.status="Offer Received";a.stage="Offer";save(d);s.status(201).json(o)});
+app.get("/api/admin/analytics",auth,role("admin"),(q,s)=>{const d=db();s.json({students:d.users.filter(x=>x.role==="student").length,placementReady:d.students.filter(x=>x.readiness>=70).length,activeDrives:d.jobs.filter(x=>x.status==="Open").length,applications:d.applications.length,shortlisted:d.applications.filter(x=>["Shortlisted","Interview","Interview Scheduled"].includes(x.status)).length,interviews:d.interviews.length,offers:d.offers.length})});
+if(!fs.existsSync(FILE)) seed();
+app.listen(PORT,()=>console.log("CAMPUSLINK backend: http://localhost:"+PORT));
