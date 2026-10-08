@@ -1,5 +1,6 @@
 const express=require("express"),cors=require("cors"),crypto=require("crypto"),fs=require("fs"),path=require("path");
 const app=express(),PORT=process.env.PORT||5000,FILE=path.join(__dirname,"data","db.json");
+fs.mkdirSync(path.dirname(FILE),{recursive:true});
 app.use(cors({origin:true,credentials:true}));app.use(express.json());
 const hash=p=>{const s=crypto.randomBytes(16).toString("hex");return{s, h:crypto.scryptSync(p,s,64).toString("hex")}};
 const ok=(p,s,h)=>crypto.scryptSync(p,s,64).toString("hex")===h;
